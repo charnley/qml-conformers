@@ -1,0 +1,1 @@
+{"nmax" : 23, "kernel": "gaussian", "cut_distance": 1000000.0, "alchemy": "off", "kernel_args": {"sigma": [0.32]}}
