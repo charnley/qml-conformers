@@ -3,8 +3,12 @@ import json
 import re
 
 import numpy as np
+import qml
 import qml.fchl as qml_fchl
 import qml.math as qml_math
+import qml.representations as qml_representations
+import qml.kernels.distance as qml_distance
+
 
 global __ATOM_LIST__
 __ATOM_LIST__ = [ x.strip() for x in ['h ','he', \
@@ -26,7 +30,7 @@ def get_atom(atom):
     return __ATOM_LIST__.index(atom) + 1
 
 
-def get_representations(charge_list, coordinates_list, parameters):
+def get_representations_fchl(charge_list, coordinates_list, parameters):
 
     nmax = parameters['nmax']
     cut_distance = parameters['cut_distance']
@@ -47,7 +51,23 @@ def get_representations(charge_list, coordinates_list, parameters):
     return rep_list
 
 
-def make_kernel(representations_x, representations_y, parameters):
+def get_representations_slatm(charge_list, coordinates_list,  parameters, mbtypes=None):
+
+    if mbtypes is None:
+        quit("error: mbtypes needed for slatm predictions")
+
+    rep_list = []
+
+    for atoms, coordinates in zip(charge_list, coordinates_list):
+        rep = qml_representations.generate_slatm(coordinates, atoms, mbtypes)
+        rep_list.append(rep)
+
+    rep_list = np.array(rep_list)
+
+    return rep_list
+
+
+def get_kernel_fchl(representations_x, representations_y, parameters):
 
     # TODO if id(representations_x) == id(representations_y)
 
@@ -65,14 +85,27 @@ def make_kernel(representations_x, representations_y, parameters):
 
     return kernel
 
+def get_kernel_slatm(representations_x, representations_y, parameters):
+
+    var_lambda = parameters['lambda']
+    var_sigma = parameters['sigma']
+
+    kernel = qml_distance.l2_distance(representations_x, representations_y)
+    kernel = np.square(kernel)
+    kernel *= -1
+    kernel /= (2*var_sigma**2)
+    kernel = np.exp(kernel)
+    # kernel[np.diag_indices_from(kernel)] += var_lambda
+
+    return kernel
 
 def get_alphas(kernel, properties):
     alpha = qml_math.cho_solve(kernel, properties)
     return alpha
 
 
-def predict(predict_representations, trained_representations, alpha, parameters):
-    kernel = make_kernel(predict_representations, trained_representations, parameters)
+def predict(predict_representations, trained_representations, alpha, parameters, get_kernel):
+    kernel = get_kernel(predict_representations, trained_representations, parameters)
     predictions = np.dot(kernel, alpha)
     return predictions
 
@@ -184,21 +217,53 @@ Stand-alone predictor of conformational energies using QML
         MODEL = json.load(f)
 
 
-    # Check input size
-    NMAX = MODEL['nmax']
-    this_n = max([len(atoms) for atoms in charges_list])
+    # SWITCH model
 
-    if this_n > NMAX:
-        print("error: The model is trained for {:}, but input has {:} atoms".format(NMAX, this_n))
-        quit()
+    krr_type = MODEL['representation']
+
+    if krr_type == "slatm":
+        get_representations = get_representations_slatm
+        get_kernel = get_kernel_slatm
+
+        folder = args.model.split("/")
+        folder = "/".join(folder[:-1]) + "/"
+
+        mbtypes = np.load(folder + MODEL['mbtypes'])
+
+        repkwargs = {"mbtypes": mbtypes}
+
+
+
+    elif krr_type == "fchl":
+        get_representations = get_representations_fchl
+        get_kernel = get_kernel_fchl
+
+        # Check input size
+        NMAX = MODEL['nmax']
+        this_n = max([len(atoms) for atoms in charges_list])
+
+        if this_n > NMAX:
+            print("error: The model is trained for {:}, but input has {:} atoms".format(NMAX, this_n))
+            quit()
+
+
+        repkwargs = {"nmax": NMAX}
+
+    else:
+        print("error: Don't know this representation")
+
+
+    # generate predict representations
+    representations = get_representations(charges_list, coordinates_list, MODEL, **repkwargs)
+
 
     # load training and alphas
     alpha = np.load(args.alpha)
     training = np.load(args.training)
 
-    # generate predict representations
-    representations = get_representations(charges_list, coordinates_list, MODEL)
-    predictions = predict(representations, training, alpha, MODEL)
+
+    # Predict
+    predictions = predict(representations, training, alpha, MODEL, get_kernel=get_kernel)
 
     for prediction in predictions:
         print(prediction)

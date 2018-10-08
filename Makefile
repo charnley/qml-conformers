@@ -10,3 +10,11 @@ predict:
 requirments:
 	pip install -r requirements.txt
 
+
+PYTHON=python3
+
+qml:
+	${PYTHON} setup.py build
+	cd build
+	# cd lib.....
+	# cp -r qml to any folder you want to use it
